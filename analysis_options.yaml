@@ -1,0 +1,46 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  plugins:
+    - dart_code_metrics
+  exclude:
+    - lib/generated/intl/*.dart
+    - lib/**/*.g.dart
+    - "**/*.freezed.dart"
+    - "**/*.config.dart"
+    - lib/utils/multi-languages/*.dart
+    - lib/gen/*.dart
+  errors:
+    invalid_annotation_target: ignore
+
+linter:
+  rules:
+    use_key_in_widget_constructors: false
+    library_private_types_in_public_api: false
+    depend_on_referenced_packages: false
+    require_trailing_commas: true
+    prefer_relative_imports: true
+    always_use_package_imports: false
+    always_put_required_named_parameters_first: true
+
+dart_code_metrics:
+  anti-patterns:
+    - long-method
+    - long-parameter-list
+  metrics:
+    cyclomatic-complexity: 20
+    maximum-nesting-level: 5
+    number-of-parameters: 4
+    source-lines-of-code: 50
+  metrics-exclude:
+    - test/**
+  rules:
+    - newline-before-return
+    - no-boolean-literal-compare
+    - prefer-trailing-comma
+    - prefer-conditional-expressions
+    - no-equal-then-else
+    - avoid-unused-parameters
+    - avoid-shrink-wrap-in-lists
+    - avoid-border-all
+    - prefer-const-border-radius

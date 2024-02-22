@@ -1,0 +1,250 @@
+stages:
+  - flutter_setup
+  - code_analyze_check
+  - sonarqube-check
+  - build
+  - sonarqube-vulnerability-report
+  - deploy
+
+default:
+  interruptible: true
+  tags:
+    - swat-runner
+  cache:
+    - key: ${CI_COMMIT_SHA}_pub-cache
+      paths:
+        - $CI_PROJECT_DIR/.pub-cache/
+    - key: ${CI_COMMIT_SHA}_generate-files
+      paths:
+        - $CI_PROJECT_DIR/lib/**/*.g.dart
+    - key: ${CI_COMMIT_SHA}_gen
+      paths:
+        - $CI_PROJECT_DIR/lib/gen/
+    - key: ${CI_COMMIT_SHA}_localization
+      paths:
+        - $CI_PROJECT_DIR/resources/
+
+.before_script_template: &mobileBeforeScript
+  before_script:
+    - sh .setup_app.sh
+    - flutter pub global activate pubspec_version
+    - FLUTTER_VERSION=`flutter pub global run pubspec_version:pubver get`
+    - export BUILD_VERSION=$(echo $FLUTTER_VERSION | cut -d "+" -f1)
+    - export BUILD_NUMBER=$(echo $FLUTTER_VERSION | cut -d "+" -f2)
+    - echo Build Version $BUILD_VERSION
+    - echo Build Number $BUILD_NUMBER
+
+.trigger_manual_rule:
+  rules:
+    - if: $CI_COMMIT_BRANCH =~ "/^bugfix/.*$/" || $CI_COMMIT_BRANCH =~ "/^feature/.*$/" || $CI_COMMIT_BRANCH =~ "/^update/.*$/" || $CI_COMMIT_BRANCH =~ "/^improve/.*$/" || $CI_COMMIT_BRANCH =~ "/^milestones/.*$/"
+      when: manual
+
+.android_template: &diawi_android
+  script:
+    - sh scripts/.setup_gitlab_env_fastlane.sh $BUILD_FLAVOR_KEY
+    - sh scripts/.setup_fastlane.sh
+    - sh scripts/.setup_env_gradle.sh
+    - sh scripts/.setup_credential_cicd.sh
+    - bundle exec fastlane buildAndroid --env $BUILD_FLAVOR_KEY
+
+.ios_template: &diawi_ios
+  script:
+    - sh scripts/.setup_gitlab_env_fastlane.sh $BUILD_FLAVOR_KEY
+    - sh scripts/.setup_fastlane.sh
+    - sh scripts/.setup_ios_precache.sh
+    - sh scripts/.setup_credential_cicd.sh
+    - bundle exec fastlane ios buildIOS --env $BUILD_FLAVOR_KEY --verbose
+
+flutter_setup:
+  stage: flutter_setup
+  script:
+    - brew tap leoafarias/fvm
+    - brew install fvm
+    - echo Y | fvm global 3.16.7
+
+code_analyze_check:
+  stage: code_analyze_check
+  needs: [flutter_setup]
+  <<: *mobileBeforeScript
+  script:
+    - sh scripts/.code_analyze.sh
+  artifacts:
+    reports:
+      codequality: code-quality-report.json
+
+diawi_android_dev:
+  stage: build
+  allow_failure: true
+  needs: [code_analyze_check]
+  variables:
+    BUILD_FLAVOR_KEY: "dev"
+  <<: *mobileBeforeScript
+  <<: *diawi_android
+  rules:
+    - !reference [.trigger_manual_rule, rules]
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: on_success
+
+diawi_android_staging:
+  stage: build
+  allow_failure: true
+  needs: [code_analyze_check]
+  variables:
+    BUILD_FLAVOR_KEY: "staging"
+  <<: *mobileBeforeScript
+  <<: *diawi_android
+  rules:
+    - !reference [.trigger_manual_rule, rules]
+    - if: '$CI_COMMIT_BRANCH =~ "/^release/.*$/"'
+      when: on_success
+
+deploy_app_center_android:
+  stage: deploy
+  when: manual
+  needs: [diawi_android_staging]
+  variables:
+    BUILD_FLAVOR_KEY: "staging"
+  script:
+    - sh scripts/.setup_gitlab_env_fastlane.sh $BUILD_FLAVOR_KEY
+    - sh scripts/.setup_fastlane.sh
+    - bundle exec fastlane android appCenterAndroidDistribute --env $BUILD_FLAVOR_KEY
+  only:
+    - /^release/.*$/
+
+diawi_android_production:
+  stage: build
+  allow_failure: true
+  needs: [code_analyze_check]
+  variables:
+    BUILD_FLAVOR_KEY: "production"
+  <<: *mobileBeforeScript
+  <<: *diawi_android
+  rules:
+    - !reference [.trigger_manual_rule, rules]
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH =~ "/^release/.*$/"'
+      when: manual
+
+diawi_ios_dev:
+  stage: build
+  allow_failure: true
+  needs: [code_analyze_check]
+  variables:
+    BUILD_FLAVOR_KEY: "dev"
+  <<: *mobileBeforeScript
+  <<: *diawi_ios
+  rules:
+    - !reference [.trigger_manual_rule, rules]
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      when: on_success
+
+diawi_ios_staging:
+  stage: build
+  allow_failure: true
+  needs: [code_analyze_check]
+  variables:
+    BUILD_FLAVOR_KEY: "staging"
+  <<: *mobileBeforeScript
+  <<: *diawi_android
+  rules:
+    - !reference [.trigger_manual_rule, rules]
+    - if: '$CI_COMMIT_BRANCH =~ "/^release/.*$/"'
+      when: on_success
+
+deploy_app_center_ios:
+  stage: deploy
+  when: manual
+  needs: [diawi_ios_staging]
+  variables:
+    BUILD_FLAVOR_KEY: "staging"
+  script:
+    - sh scripts/.setup_gitlab_env_fastlane.sh $BUILD_FLAVOR_KEY
+    - sh scripts/.setup_fastlane.sh
+    - bundle exec fastlane ios appCenterIOSDistribute --env $BUILD_FLAVOR_KEY
+  only:
+    - /^release/.*$/
+
+diawi_ios_production:
+  stage: build
+  allow_failure: true
+  needs: [code_analyze_check]
+  variables:
+    BUILD_FLAVOR_KEY: "production"
+  <<: *mobileBeforeScript
+  <<: *diawi_android
+  rules:
+    - !reference [.trigger_manual_rule, rules]
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      when: on_success
+    - if: '$CI_COMMIT_BRANCH =~ "/^release/.*$/"'
+      when: manual
+
+deploy_testflight:
+  stage: deploy
+  when: manual
+  needs: [diawi_ios_production]
+  variables:
+    BUILD_FLAVOR_KEY: "production"
+  script:
+    - APP_STORE_CONNECT_TOKEN=$PRODUCTION_APP_STORE_CONNECT_KEY
+    - sh scripts/.setup_gitlab_env_fastlane.sh $BUILD_FLAVOR_KEY
+    - sh scripts/.setup_fastlane.sh
+    - sh scripts/.setup_credential_cicd.sh
+    - bundle exec fastlane ios testFlightDistribute --env $BUILD_FLAVOR_KEY
+  only:
+    - master
+
+deploy_appstore_ios:
+  stage: deploy
+  when: manual
+  needs: [diawi_ios_production]
+  variables:
+    BUILD_FLAVOR_KEY: "production"
+  script:
+    - APP_STORE_CONNECT_TOKEN=$PRODUCTION_APP_STORE_CONNECT_KEY
+    - sh scripts/.setup_gitlab_env_fastlane.sh $BUILD_FLAVOR_KEY
+    - sh scripts/.setup_fastlane.sh
+    - sh scripts/.setup_credential_cicd.sh
+    - bundle exec fastlane ios appstoreDistribute --env $BUILD_FLAVOR_KEY
+  only:
+    - master
+
+sonarqube-check:
+  stage: sonarqube-check
+  image: 
+    name: sonarsource/sonar-scanner-cli:5.0
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+    GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script: 
+    - sonar-scanner
+  allow_failure: true
+  only:
+    - merge_requests
+    - release/.*$
+    - main
+    - develop
+    - master
+
+sonarqube-vulnerability-report:
+  stage: sonarqube-vulnerability-report
+  script:
+    - 'curl -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/issues/gitlab_sast_export?projectKey=c3_flutter-temp_AYqsfQafO6uLaMX8EUVo&branch=${CI_COMMIT_BRANCH}&pullRequest=${CI_MERGE_REQUEST_IID}" -o gl-sast-sonar-report.json'
+  allow_failure: true
+  needs: [ sonarqube-check ]
+  only:
+    - merge_requests
+    - master
+    - release/.*$
+    - main
+    - develop
+  artifacts:
+    expire_in: 1 day
+    reports:
+      sast: gl-sast-sonar-report.json
